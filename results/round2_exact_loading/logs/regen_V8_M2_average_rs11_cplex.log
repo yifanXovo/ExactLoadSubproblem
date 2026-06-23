@@ -1,0 +1,2 @@
+status=fixed_route_optimal
+cplex_status=candidate_mip_optimal_gap0

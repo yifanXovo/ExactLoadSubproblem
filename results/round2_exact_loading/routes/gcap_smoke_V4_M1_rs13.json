@@ -1,0 +1,6 @@
+{
+  "route_set_id": "gcap_smoke_V4_M1_rs13",
+  "routes": [
+    {"vehicle": 0, "nodes": [0, 1, 4, 2, 0]}
+  ]
+}

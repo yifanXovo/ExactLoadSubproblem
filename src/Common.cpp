@@ -231,11 +231,20 @@ std::string toJson(const Result& r) {
     out << "  \"G\": " << r.G << ",\n";
     out << "  \"P\": " << r.P << ",\n";
     out << "  \"runtime_ms\": " << r.runtime_ms << ",\n";
+    out << "  \"cplex_status\": \"" << esc(r.cplex_status) << "\",\n";
     out << "  \"cplex_objective\": " << r.cplex_objective << ",\n";
+    out << "  \"cplex_G\": " << r.cplex_G << ",\n";
+    out << "  \"cplex_P\": " << r.cplex_P << ",\n";
+    out << "  \"cplex_LB\": " << r.cplex_LB << ",\n";
+    out << "  \"cplex_UB\": " << r.cplex_UB << ",\n";
     out << "  \"cplex_gap\": " << r.cplex_gap << ",\n";
+    out << "  \"cplex_runtime_ms\": " << r.cplex_runtime_ms << ",\n";
+    out << "  \"cplex_nodes\": " << r.cplex_nodes << ",\n";
     out << "  \"objective_diff\": " << r.objective_diff << ",\n";
     out << "  \"profiles_generated\": " << r.profiles_generated << ",\n";
     out << "  \"profiles_after_dominance\": " << r.profiles_after_dominance << ",\n";
+    out << "  \"profile_bpc_nodes\": " << r.profile_bpc_nodes << ",\n";
+    out << "  \"profile_bpc_pricing_calls\": " << r.profile_bpc_pricing_calls << ",\n";
     out << "  \"cache_hits\": " << r.cache_hits << ",\n";
     out << "  \"cache_misses\": " << r.cache_misses << ",\n";
     out << "  \"incremental_speedup\": " << r.incremental_speedup << ",\n";
@@ -261,7 +270,8 @@ std::string toJson(const Result& r) {
 
 std::string csvHeader() {
     return "instance,route_set_id,V,M,route_lengths,algorithm,status,objective,G,P,runtime_ms,"
-           "cplex_objective,cplex_gap,objective_diff,profiles_generated,profiles_after_dominance,"
+           "cplex_status,cplex_objective,cplex_G,cplex_P,cplex_LB,cplex_UB,cplex_gap,cplex_runtime_ms,cplex_nodes,"
+           "objective_diff,profiles_generated,profiles_after_dominance,profile_bpc_nodes,profile_bpc_pricing_calls,"
            "cache_hits,cache_misses,incremental_speedup,verifier_passed,exact_for_fixed_routes,result_file,log_file,notes\n";
 }
 
@@ -273,8 +283,11 @@ std::string csvRow(const Result& r) {
         << csvEsc(r.instance) << ',' << csvEsc(r.route_set_id) << ',' << r.V << ',' << r.M << ','
         << csvEsc(r.route_lengths) << ',' << csvEsc(r.algorithm) << ',' << csvEsc(r.status) << ','
         << r.objective << ',' << r.G << ',' << r.P << ',' << r.runtime_ms << ','
-        << r.cplex_objective << ',' << r.cplex_gap << ',' << r.objective_diff << ','
-        << r.profiles_generated << ',' << r.profiles_after_dominance << ',' << r.cache_hits << ','
+        << csvEsc(r.cplex_status) << ',' << r.cplex_objective << ',' << r.cplex_G << ',' << r.cplex_P << ','
+        << r.cplex_LB << ',' << r.cplex_UB << ',' << r.cplex_gap << ',' << r.cplex_runtime_ms << ','
+        << r.cplex_nodes << ',' << r.objective_diff << ','
+        << r.profiles_generated << ',' << r.profiles_after_dominance << ',' << r.profile_bpc_nodes << ','
+        << r.profile_bpc_pricing_calls << ',' << r.cache_hits << ','
         << r.cache_misses << ',' << r.incremental_speedup << ',' << (r.verifier_passed ? "true" : "false")
         << ',' << (r.exact_for_fixed_routes ? "true" : "false") << ',' << csvEsc(r.result_file) << ','
         << csvEsc(r.log_file) << ',' << csvEsc(notes) << "\n";
@@ -286,4 +299,3 @@ std::string basenameNoExt(const std::filesystem::path& path) {
 }
 
 } // namespace load_exact
-

@@ -69,7 +69,19 @@ struct RunOptions {
     double drop_time = 60.0;
     int route_length_limit = 0;
     int profile_limit = 0;
+    bool profile_exact = true;
+    bool allow_natural_mode_pruning = false;
+    double cplex_time_limit = 300.0;
+    double cplex_gap = 0.0;
+    std::string route_json_path;
+    std::string route_generator = "deterministic";
+    int route_count = 1;
+    int route_length_min = 3;
+    int route_length_max = 4;
+    int seed = 1;
+    bool allow_duplicate_stations = false;
     bool run_suite = false;
+    bool round2_suite = false;
 };
 
 struct Result {
@@ -85,10 +97,19 @@ struct Result {
     double P = 0.0;
     double runtime_ms = 0.0;
     double cplex_objective = 0.0;
+    double cplex_G = 0.0;
+    double cplex_P = 0.0;
+    double cplex_LB = 0.0;
+    double cplex_UB = 0.0;
     double cplex_gap = 0.0;
+    double cplex_runtime_ms = 0.0;
+    long long cplex_nodes = 0;
+    std::string cplex_status = "not_run";
     double objective_diff = 0.0;
     long long profiles_generated = 0;
     long long profiles_after_dominance = 0;
+    long long profile_bpc_nodes = 0;
+    long long profile_bpc_pricing_calls = 0;
     long long cache_hits = 0;
     long long cache_misses = 0;
     double incremental_speedup = 0.0;
@@ -127,4 +148,3 @@ std::string csvRow(const Result& result);
 std::string basenameNoExt(const std::filesystem::path& path);
 
 } // namespace load_exact
-

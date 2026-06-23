@@ -24,10 +24,26 @@ Example:
 build\ExactLoadSubproblem.exe --input ..\ExactEBRP\reference\generated\regen_V8_M2_average.txt --algorithm profile-dp --out results\raw\v8_profile_dp.json --log results\logs\v8_profile_dp.log
 ```
 
+Round 2 exact validation campaign:
+
+```powershell
+build\ExactLoadSubproblem.exe --round2-suite --exactebrp-root ..\ExactEBRP --cplex-time-limit 300 --cplex-gap 0 --seed 42
+```
+
+Single fixed-route run:
+
+```powershell
+build\ExactLoadSubproblem.exe --input ..\ExactEBRP\testdata\examples\gcap_smoke_V4_M1.txt --algorithm cplex-fixed-route --profile-exact true --allow-natural-mode-pruning false --route-json results\round2_exact_loading\routes\gcap_smoke_V4_M1_rs0.json --out results\round2_exact_loading\raw\single_cplex.json --log results\round2_exact_loading\logs\single_cplex.log
+```
+
 Implemented approaches:
 
-- `profile-dp`: exact route-profile enumeration for the generated fixed-route
-  set, followed by cross-route profile combination.
+- `profile-dp`: exact route-profile enumeration for the fixed-route set when
+  `--profile-exact true`, `--allow-natural-mode-pruning false`, and no profile
+  limit truncates generation.
+- `cplex-fixed-route`: CPLEX candidate-MIP validation over the completely
+  enumerated fixed-route loading candidates. If the candidate list is truncated,
+  the row is not treated as certified.
 - `incremental-test`: recomputes only changed route profiles and updates Gini
   pair terms in O(|Delta| V), then checks against full recomputation.
 - `cplex-fixed-route`: placeholder row unless an external CPLEX fixed-route

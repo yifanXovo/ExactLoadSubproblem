@@ -1,6 +1,7 @@
 #include "Common.hpp"
 #include "LoadSolver.hpp"
 
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -28,10 +29,22 @@ RunOptions parse(int argc, char** argv) {
         else if (a == "--drop-time") opt.drop_time = std::stod(value(i, argc, argv));
         else if (a == "--route-length-limit") opt.route_length_limit = std::stoi(value(i, argc, argv));
         else if (a == "--profile-limit") opt.profile_limit = std::stoi(value(i, argc, argv));
+        else if (a == "--profile-exact") opt.profile_exact = value(i, argc, argv) == "true";
+        else if (a == "--allow-natural-mode-pruning") opt.allow_natural_mode_pruning = value(i, argc, argv) == "true";
+        else if (a == "--cplex-time-limit") opt.cplex_time_limit = std::stod(value(i, argc, argv));
+        else if (a == "--cplex-gap") opt.cplex_gap = std::stod(value(i, argc, argv));
+        else if (a == "--route-json") opt.route_json_path = value(i, argc, argv);
+        else if (a == "--route-generator") opt.route_generator = value(i, argc, argv);
+        else if (a == "--route-count") opt.route_count = std::stoi(value(i, argc, argv));
+        else if (a == "--route-length-min") opt.route_length_min = std::stoi(value(i, argc, argv));
+        else if (a == "--route-length-max") opt.route_length_max = std::stoi(value(i, argc, argv));
+        else if (a == "--seed") opt.seed = std::stoi(value(i, argc, argv));
+        else if (a == "--allow-duplicate-stations") opt.allow_duplicate_stations = value(i, argc, argv) == "true";
         else if (a == "--exactebrp-root") opt.exactebrp_root = value(i, argc, argv);
         else if (a == "--run-suite") opt.run_suite = true;
+        else if (a == "--round2-suite") opt.round2_suite = true;
         else if (a == "--help") {
-            std::cout << "ExactLoadSubproblem --input file --algorithm profile-dp|incremental-test|cplex-fixed-route --out json --log log\n";
+            std::cout << "ExactLoadSubproblem --input file --algorithm profile-dp|profile-bpc|incremental-test|cplex-fixed-route --route-json path --out json --log log\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown argument: " + a);
     }
@@ -43,6 +56,11 @@ RunOptions parse(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         RunOptions opt = parse(argc, argv);
+        if (opt.round2_suite) {
+            auto results = runRound2Suite(opt);
+            std::cout << "round2_results=" << results.size() << "\n";
+            return 0;
+        }
         if (opt.run_suite) {
             auto results = runDefaultSuite(opt);
             std::string csv = csvHeader();
@@ -61,16 +79,21 @@ int main(int argc, char** argv) {
         if (opt.algorithm == "incremental-test") {
             r = runIncrementalTest(inst, opt);
         } else if (opt.algorithm == "cplex-fixed-route") {
-            r.instance = inst.name;
-            r.V = inst.V;
-            r.M = inst.M;
-            r.algorithm = opt.algorithm;
-            r.status = "external_cplex_fixed_route_not_run_by_standalone_prototype";
-            r.notes.push_back("Profile-DP solver is used as standalone exact fixed-route baseline; CPLEX row requires external model export.");
-            r.result_file = opt.out_path;
-            r.log_file = opt.log_path;
+            auto routes = opt.route_json_path.empty()
+                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                : readRoutesFromJson(opt.route_json_path);
+            r = solveCplexFixedRoute(inst, opt, routes);
+        } else if (opt.algorithm == "profile-bpc") {
+            auto routes = opt.route_json_path.empty()
+                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                : readRoutesFromJson(opt.route_json_path);
+            r = solveFixedRoutes(inst, opt, routes);
+            r.algorithm = "profile-bpc";
+            r.status = r.exact_for_fixed_routes ? "profile_bpc_exact_bb_optimal" : r.status;
         } else {
-            auto routes = makeDeterministicRoutes(inst, opt.route_length_limit);
+            auto routes = opt.route_json_path.empty()
+                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                : readRoutesFromJson(opt.route_json_path);
             r = solveFixedRoutes(inst, opt, routes);
         }
         writeText(opt.out_path, toJson(r));
@@ -85,4 +108,3 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
-
