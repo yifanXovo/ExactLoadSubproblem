@@ -1,0 +1,4 @@
+status=profile_bpc_exact_bb_optimal
+algorithm=profile-bpc
+objective=0.788531
+objective_diff=0.000000

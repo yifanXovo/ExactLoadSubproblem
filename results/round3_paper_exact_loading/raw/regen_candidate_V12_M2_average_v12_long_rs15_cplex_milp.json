@@ -1,0 +1,51 @@
+{
+    "instance":  "regen_candidate_V12_M2_average.txt",
+    "route_set_id":  "regen_candidate_V12_M2_average_v12_long_rs15",
+    "V":  12,
+    "M":  2,
+    "route_lengths":  "5;6",
+    "algorithm":  "cplex-fixed-route",
+    "status":  "cplex_true_milp_not_closed",
+    "objective":  0,
+    "G":  0,
+    "P":  0,
+    "runtime_ms":  75.75,
+    "cplex_status":  "cplex_milp_ratio_sum_selector_limit",
+    "cplex_objective":  0,
+    "cplex_G":  0,
+    "cplex_P":  0,
+    "cplex_LB":  0,
+    "cplex_UB":  0,
+    "cplex_gap":  1,
+    "cplex_runtime_ms":  0,
+    "cplex_nodes":  0,
+    "profile_bpc_status":  "",
+    "profile_bpc_objective":  0,
+    "profile_bpc_G":  0,
+    "profile_bpc_P":  0,
+    "profile_bpc_LB":  0,
+    "profile_bpc_UB":  0,
+    "profile_bpc_gap":  1,
+    "profile_bpc_runtime_ms":  75.75,
+    "objective_diff":  0,
+    "profiles_generated":  0,
+    "profiles_after_dominance":  0,
+    "profile_bpc_nodes":  0,
+    "profile_bpc_pricing_calls":  0,
+    "cache_hits":  0,
+    "cache_misses":  0,
+    "incremental_speedup":  0,
+    "verifier_passed":  false,
+    "exact_for_fixed_routes":  false,
+    "result_file":  "results/round3_paper_exact_loading\\raw\\regen_candidate_V12_M2_average_v12_long_rs15_cplex_milp.json",
+    "log_file":  "results/round3_paper_exact_loading\\logs\\regen_candidate_V12_M2_average_v12_long_rs15_cplex_milp.log",
+    "final_inventory":  [
+
+                        ],
+    "verification_errors":  [
+
+                            ],
+    "notes":  [
+                  "Exact ratio-sum selector set exceeded the configured safety limit."
+              ]
+}

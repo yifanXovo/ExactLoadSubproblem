@@ -1,0 +1,4 @@
+status=
+algorithm=cplex-fixed-route
+objective=0.000000
+cplex_status=cplex_milp_ratio_sum_selector_limit

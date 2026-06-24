@@ -240,6 +240,14 @@ std::string toJson(const Result& r) {
     out << "  \"cplex_gap\": " << r.cplex_gap << ",\n";
     out << "  \"cplex_runtime_ms\": " << r.cplex_runtime_ms << ",\n";
     out << "  \"cplex_nodes\": " << r.cplex_nodes << ",\n";
+    out << "  \"profile_bpc_status\": \"" << esc(r.status) << "\",\n";
+    out << "  \"profile_bpc_objective\": " << r.objective << ",\n";
+    out << "  \"profile_bpc_G\": " << r.G << ",\n";
+    out << "  \"profile_bpc_P\": " << r.P << ",\n";
+    out << "  \"profile_bpc_LB\": " << r.objective << ",\n";
+    out << "  \"profile_bpc_UB\": " << r.objective << ",\n";
+    out << "  \"profile_bpc_gap\": " << (r.exact_for_fixed_routes ? 0.0 : 1.0) << ",\n";
+    out << "  \"profile_bpc_runtime_ms\": " << r.runtime_ms << ",\n";
     out << "  \"objective_diff\": " << r.objective_diff << ",\n";
     out << "  \"profiles_generated\": " << r.profiles_generated << ",\n";
     out << "  \"profiles_after_dominance\": " << r.profiles_after_dominance << ",\n";

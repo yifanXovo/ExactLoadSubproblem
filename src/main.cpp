@@ -35,14 +35,20 @@ RunOptions parse(int argc, char** argv) {
         else if (a == "--cplex-gap") opt.cplex_gap = std::stod(value(i, argc, argv));
         else if (a == "--route-json") opt.route_json_path = value(i, argc, argv);
         else if (a == "--route-generator") opt.route_generator = value(i, argc, argv);
+        else if (a == "--profile-master") opt.profile_master = value(i, argc, argv);
+        else if (a == "--profile-pricing") opt.profile_pricing = value(i, argc, argv);
         else if (a == "--route-count") opt.route_count = std::stoi(value(i, argc, argv));
         else if (a == "--route-length-min") opt.route_length_min = std::stoi(value(i, argc, argv));
         else if (a == "--route-length-max") opt.route_length_max = std::stoi(value(i, argc, argv));
         else if (a == "--seed") opt.seed = std::stoi(value(i, argc, argv));
         else if (a == "--allow-duplicate-stations") opt.allow_duplicate_stations = value(i, argc, argv) == "true";
+        else if (a == "--profile-bpc-time-limit") opt.profile_bpc_time_limit = std::stod(value(i, argc, argv));
+        else if (a == "--profile-bpc-gap") opt.profile_bpc_gap = std::stod(value(i, argc, argv));
+        else if (a == "--profile-bpc-max-nodes") opt.profile_bpc_max_nodes = std::stoi(value(i, argc, argv));
         else if (a == "--exactebrp-root") opt.exactebrp_root = value(i, argc, argv);
         else if (a == "--run-suite") opt.run_suite = true;
         else if (a == "--round2-suite") opt.round2_suite = true;
+        else if (a == "--round3-suite") opt.round3_suite = true;
         else if (a == "--help") {
             std::cout << "ExactLoadSubproblem --input file --algorithm profile-dp|profile-bpc|incremental-test|cplex-fixed-route --route-json path --out json --log log\n";
             std::exit(0);
@@ -59,6 +65,11 @@ int main(int argc, char** argv) {
         if (opt.round2_suite) {
             auto results = runRound2Suite(opt);
             std::cout << "round2_results=" << results.size() << "\n";
+            return 0;
+        }
+        if (opt.round3_suite) {
+            auto results = runRound3Suite(opt);
+            std::cout << "round3_results=" << results.size() << "\n";
             return 0;
         }
         if (opt.run_suite) {
@@ -80,19 +91,22 @@ int main(int argc, char** argv) {
             r = runIncrementalTest(inst, opt);
         } else if (opt.algorithm == "cplex-fixed-route") {
             auto routes = opt.route_json_path.empty()
-                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                ? (opt.route_generator == "random" ? makeRandomRoutes(inst, opt, 0)
+                                                    : makeDeterministicRoutes(inst, opt.route_length_limit))
                 : readRoutesFromJson(opt.route_json_path);
             r = solveCplexFixedRoute(inst, opt, routes);
         } else if (opt.algorithm == "profile-bpc") {
             auto routes = opt.route_json_path.empty()
-                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                ? (opt.route_generator == "random" ? makeRandomRoutes(inst, opt, 0)
+                                                    : makeDeterministicRoutes(inst, opt.route_length_limit))
                 : readRoutesFromJson(opt.route_json_path);
             r = solveFixedRoutes(inst, opt, routes);
             r.algorithm = "profile-bpc";
             r.status = r.exact_for_fixed_routes ? "profile_bpc_exact_bb_optimal" : r.status;
         } else {
             auto routes = opt.route_json_path.empty()
-                ? makeDeterministicRoutes(inst, opt.route_length_limit)
+                ? (opt.route_generator == "random" ? makeRandomRoutes(inst, opt, 0)
+                                                    : makeDeterministicRoutes(inst, opt.route_length_limit))
                 : readRoutesFromJson(opt.route_json_path);
             r = solveFixedRoutes(inst, opt, routes);
         }

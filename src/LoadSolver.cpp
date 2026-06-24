@@ -156,6 +156,7 @@ RouteProfileSet profilesForRoute(const Instance& inst, const RoutePlan& route,
 struct CombineState {
     const Instance* inst = nullptr;
     const RunOptions* opt = nullptr;
+    const Timer* timer = nullptr;
     const std::vector<RouteProfileSet>* sets = nullptr;
     std::vector<int> inv;
     std::vector<RoutePlan> routes;
@@ -163,10 +164,22 @@ struct CombineState {
     long long nodes = 0;
     std::vector<Candidate>* all_candidates = nullptr;
     long long candidate_limit = 100000;
+    bool aborted = false;
 };
 
 void combine(CombineState& st, int k) {
+    if (st.aborted) return;
     ++st.nodes;
+    if (st.opt && st.opt->profile_bpc_max_nodes > 0 &&
+        st.nodes > st.opt->profile_bpc_max_nodes) {
+        st.aborted = true;
+        return;
+    }
+    if (st.timer && st.opt && st.opt->profile_bpc_time_limit > 0.0 &&
+        st.timer->seconds() > st.opt->profile_bpc_time_limit) {
+        st.aborted = true;
+        return;
+    }
     if (k == static_cast<int>(st.sets->size())) {
         auto obj = computeObjectiveParts(*st.inst, st.inv, st.opt->lambda);
         Candidate c;
@@ -276,42 +289,290 @@ std::string cplexScriptPath(const std::filesystem::path& lp) {
     return lp.parent_path().append("run.cplex").string();
 }
 
-bool writeAndRunCplexCandidateMip(const RunOptions& opt,
-                                  const std::string& route_set_id,
-                                  const std::vector<Candidate>& candidates,
-                                  Result& r) {
-    if (candidates.empty()) {
-        r.cplex_status = "no_candidates";
-        return false;
+std::string plusTerms(const std::vector<std::string>& terms) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < terms.size(); ++i) {
+        out << " + " << terms[i];
     }
+    return out.str();
+}
+
+std::string sumTerms(const std::vector<std::string>& terms) {
+    if (terms.empty()) return " 0";
+    std::ostringstream out;
+    for (std::size_t i = 0; i < terms.size(); ++i) {
+        out << (i ? " + " : " ") << terms[i];
+    }
+    return out.str();
+}
+
+std::vector<double> ratioSumValues(const Instance& inst,
+                                   const std::vector<std::vector<int>>& domains,
+                                   std::size_t max_values,
+                                   bool& truncated) {
+    std::map<std::string, double> vals;
+    vals["0"] = 0.0;
+    for (int i = 1; i <= inst.V; ++i) {
+        std::map<std::string, double> next;
+        for (const auto& kv : vals) {
+            for (int y : domains[i]) {
+                const double v = kv.second + static_cast<double>(y) / inst.target[i];
+                std::ostringstream key;
+                key << std::fixed << std::setprecision(9) << v;
+                next[key.str()] = v;
+                if (next.size() > max_values) {
+                    truncated = true;
+                    return {};
+                }
+            }
+        }
+        vals.swap(next);
+    }
+    std::vector<double> out;
+    for (const auto& kv : vals) out.push_back(kv.second);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+double hMaxBound(const Instance& inst) {
+    double hmax = 0.0;
+    for (int i = 1; i <= inst.V; ++i) {
+        const double ai = static_cast<double>(inst.capacity[i]) / inst.target[i];
+        for (int j = i + 1; j <= inst.V; ++j) {
+            const double aj = static_cast<double>(inst.capacity[j]) / inst.target[j];
+            hmax += std::max(std::fabs(ai), std::fabs(aj));
+        }
+    }
+    return std::max(1.0, hmax);
+}
+
+std::map<std::string, double> parseCplexVariables(const std::filesystem::path& sol) {
+    std::ifstream in(sol);
+    if (!in) return {};
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::regex var_re(R"(<variable\s+name=\"([^\"]+)\"\s+index=\"[^\"]*\"\s+value=\"([^\"]+)\")");
+    std::map<std::string, double> vars;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), var_re);
+         it != std::sregex_iterator(); ++it) {
+        vars[(*it)[1].str()] = std::stod((*it)[2].str());
+    }
+    return vars;
+}
+
+std::string parseSolutionStatus(const std::filesystem::path& sol) {
+    std::ifstream in(sol);
+    if (!in) return "no_solution_file";
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::smatch m;
+    std::regex status_re(R"(solutionStatusString=\"([^\"]+)\")");
+    return std::regex_search(text, m, status_re) ? m[1].str() : "unknown_solution_status";
+}
+
+double parseSolutionObjective(const std::filesystem::path& sol) {
+    std::ifstream in(sol);
+    if (!in) return std::numeric_limits<double>::infinity();
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::smatch m;
+    std::regex obj_re(R"(objectiveValue=\"([^\"]+)\")");
+    return std::regex_search(text, m, obj_re) ? std::stod(m[1].str())
+                                             : std::numeric_limits<double>::infinity();
+}
+
+bool writeAndRunTrueFixedRouteMilp(const Instance& inst, const RunOptions& opt,
+                                   const std::vector<RoutePlan>& fixed_routes,
+                                   Result& r) {
     if (!commandExists("cplex")) {
         r.cplex_status = "cplex_not_available";
-        r.notes.push_back("CPLEX executable not found; exact enumeration fallback used for comparison fields.");
+        r.status = "cplex_true_milp_not_run";
+        r.cplex_gap = 1.0;
+        r.notes.push_back("CPLEX executable not found; true fixed-route MILP was not run.");
         return false;
     }
-    const std::filesystem::path dir = std::filesystem::path("results/round2_exact_loading/cplex") / route_set_id;
+    std::vector<int> visit_count(inst.V + 1, 0);
+    for (const auto& route : fixed_routes) {
+        for (std::size_t t = 1; t + 1 < route.nodes.size(); ++t) {
+            if (route.nodes[t] < 1 || route.nodes[t] > inst.V) {
+                r.cplex_status = "invalid_fixed_route_station";
+                r.status = "invalid_fixed_route_station";
+                r.cplex_gap = 1.0;
+                return false;
+            }
+            visit_count[route.nodes[t]]++;
+        }
+    }
+    if (!opt.allow_duplicate_stations) {
+        for (int i = 1; i <= inst.V; ++i) {
+            if (visit_count[i] > 1) {
+                r.cplex_status = "invalid_fixed_routes_duplicate_station";
+                r.status = "invalid_fixed_routes_duplicate_station";
+                r.cplex_gap = 1.0;
+                r.notes.push_back("Fixed route set violates station-disjointness.");
+                return false;
+            }
+        }
+    }
+    std::vector<std::vector<int>> domains(inst.V + 1);
+    for (int i = 1; i <= inst.V; ++i) {
+        if (visit_count[i] == 0) domains[i].push_back(inst.initial[i]);
+        else for (int y = 0; y <= inst.capacity[i]; ++y) domains[i].push_back(y);
+    }
+    bool s_truncated = false;
+    auto s_values = ratioSumValues(inst, domains, 200000, s_truncated);
+    if (s_truncated || s_values.empty()) {
+        r.cplex_status = "cplex_milp_ratio_sum_selector_limit";
+        r.status = "cplex_true_milp_not_closed";
+        r.cplex_gap = 1.0;
+        r.exact_for_fixed_routes = false;
+        r.notes.push_back("Exact ratio-sum selector set exceeded the configured safety limit.");
+        return false;
+    }
+
+    std::filesystem::path root = "results/round3_paper_exact_loading";
+    const std::filesystem::path dir = root / "cplex" / r.route_set_id;
     std::filesystem::create_directories(dir);
-    const auto lp = dir / "fixed_route_candidate_mip.lp";
+    const auto lp = dir / "fixed_route_true_milp.lp";
     const auto sol = dir / "solution.sol";
     const auto log = dir / "cplex.log";
+    auto pvar = [](int k, int t) { return "p_" + std::to_string(k) + "_" + std::to_string(t); };
+    auto dvar = [](int k, int t) { return "d_" + std::to_string(k) + "_" + std::to_string(t); };
+    auto lvar = [](int k, int t) { return "L_" + std::to_string(k) + "_" + std::to_string(t); };
+    auto uvar = [](int k) { return "u_" + std::to_string(k); };
+    struct StopRef { int k; int t; int station; };
+    std::vector<std::vector<StopRef>> by_vehicle(inst.M);
+    std::vector<std::vector<std::string>> p_terms(inst.V + 1), d_terms(inst.V + 1);
+    std::vector<std::string> bounds, generals, binaries;
+    for (const auto& route : fixed_routes) {
+        for (std::size_t pos = 1; pos + 1 < route.nodes.size(); ++pos) {
+            StopRef ref{route.vehicle, static_cast<int>(pos), route.nodes[pos]};
+            by_vehicle[ref.k].push_back(ref);
+            p_terms[ref.station].push_back(pvar(ref.k, ref.t));
+            d_terms[ref.station].push_back(dvar(ref.k, ref.t));
+            generals.push_back(pvar(ref.k, ref.t));
+            generals.push_back(dvar(ref.k, ref.t));
+            generals.push_back(lvar(ref.k, ref.t));
+            bounds.push_back(" 0 <= " + pvar(ref.k, ref.t) + " <= " + std::to_string(inst.initial[ref.station]));
+            bounds.push_back(" 0 <= " + dvar(ref.k, ref.t) + " <= " + std::to_string(inst.capacity[ref.station] - inst.initial[ref.station]));
+            bounds.push_back(" 0 <= " + lvar(ref.k, ref.t) + " <= " + std::to_string(inst.Q[ref.k]));
+        }
+    }
+    for (int k = 0; k < inst.M; ++k) {
+        generals.push_back(uvar(k));
+        bounds.push_back(" 0 <= " + uvar(k) + " <= " + std::to_string(inst.Q[k]));
+    }
+    const double hmax = hMaxBound(inst);
+    const double smax = std::max(1.0, *std::max_element(s_values.begin(), s_values.end()));
     std::ostringstream model;
     model << std::setprecision(12);
     model << "Minimize\n obj:";
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-        model << (i ? " + " : " ") << candidates[i].objective << " z" << i;
+    for (std::size_t m = 0; m < s_values.size(); ++m) {
+        const double coeff = s_values[m] > 1e-12 ? 1.0 / (static_cast<double>(inst.V) * s_values[m]) : 0.0;
+        model << (m ? " + " : " ") << coeff << " WH_" << m;
     }
-    model << "\nSubject To\n choose:";
-    for (std::size_t i = 0; i < candidates.size(); ++i) model << (i ? " + " : " ") << "z" << i;
-    model << " = 1\nBounds\n";
-    for (std::size_t i = 0; i < candidates.size(); ++i) model << " 0 <= z" << i << " <= 1\n";
+    model << " + " << opt.lambda << " P\nSubject To\n";
+    int c = 0;
+    auto cname = [&]() { return " c" + std::to_string(++c) + ":"; };
+    for (int k = 0; k < inst.M; ++k) {
+        const auto& refs = by_vehicle[k];
+        for (std::size_t idx = 0; idx < refs.size(); ++idx) {
+            const auto& ref = refs[idx];
+            model << cname() << " " << lvar(ref.k, ref.t);
+            if (idx > 0) model << " - " << lvar(ref.k, refs[idx - 1].t);
+            model << " - " << pvar(ref.k, ref.t) << " + " << dvar(ref.k, ref.t) << " = 0\n";
+        }
+        model << cname() << " " << uvar(k);
+        if (!refs.empty()) model << " - " << lvar(k, refs.back().t);
+        model << " = 0\n";
+        double route_travel = 0.0;
+        for (const auto& route : fixed_routes) if (route.vehicle == k) route_travel = travel(inst, route.nodes);
+        model << cname();
+        bool any = false;
+        for (const auto& ref : refs) {
+            model << (any ? " + " : " ") << inst.pickup_time << " " << pvar(ref.k, ref.t);
+            model << " + " << inst.drop_time << " " << dvar(ref.k, ref.t);
+            any = true;
+        }
+        model << (any ? " + " : " ") << inst.drop_time << " " << uvar(k)
+              << " <= " << (inst.route_time_limit - route_travel) << "\n";
+    }
+    for (int i = 1; i <= inst.V; ++i) {
+        const std::string Yi = "Y_" + std::to_string(i);
+        const std::string ri = "r_" + std::to_string(i);
+        const std::string devi = "dev_" + std::to_string(i);
+        generals.push_back(Yi);
+        bounds.push_back(" 0 <= " + Yi + " <= " + std::to_string(inst.capacity[i]));
+        bounds.push_back(" 0 <= " + ri + " <= " + std::to_string(static_cast<double>(inst.capacity[i]) / inst.target[i]));
+        bounds.push_back(" 0 <= " + devi);
+        model << cname() << " " << Yi << plusTerms(p_terms[i]);
+        for (const auto& d : d_terms[i]) model << " - " << d;
+        model << " = " << inst.initial[i] << "\n";
+        model << cname() << " " << Yi << " - " << inst.target[i] << " " << ri << " = 0\n";
+        model << cname() << " " << devi << " - " << ri << " >= -1\n";
+        model << cname() << " " << devi << " + " << ri << " >= 1\n";
+        const std::string mode = "mode_" + std::to_string(i);
+        binaries.push_back(mode);
+        if (!p_terms[i].empty() || !d_terms[i].empty()) {
+            model << cname() << sumTerms(p_terms[i]) << " - " << inst.initial[i] << " " << mode << " <= 0\n";
+            model << cname() << sumTerms(d_terms[i]) << " + " << (inst.capacity[i] - inst.initial[i])
+                  << " " << mode << " <= " << (inst.capacity[i] - inst.initial[i]) << "\n";
+        }
+        model << cname();
+        for (std::size_t v = 0; v < domains[i].size(); ++v) {
+            const std::string bv = "B_" + std::to_string(i) + "_" + std::to_string(domains[i][v]);
+            binaries.push_back(bv);
+            model << (v ? " + " : " ") << bv;
+        }
+        model << " = 1\n";
+        model << cname() << " " << Yi;
+        for (int y : domains[i]) model << " - " << y << " B_" << i << "_" << y;
+        model << " = 0\n";
+    }
+    for (int i = 1; i <= inst.V; ++i) {
+        for (int j = i + 1; j <= inst.V; ++j) {
+            const std::string h = "h_" + std::to_string(i) + "_" + std::to_string(j);
+            bounds.push_back(" 0 <= " + h + " <= " + std::to_string(hmax));
+            model << cname() << " " << h << " - r_" << i << " + r_" << j << " >= 0\n";
+            model << cname() << " " << h << " + r_" << i << " - r_" << j << " >= 0\n";
+        }
+    }
+    model << cname() << " P";
+    for (int i = 1; i <= inst.V; ++i) model << " - " << inst.weights[i] << " dev_" << i;
+    model << " = 0\n";
+    model << cname() << " H";
+    for (int i = 1; i <= inst.V; ++i) for (int j = i + 1; j <= inst.V; ++j) model << " - h_" << i << "_" << j;
+    model << " = 0\n";
+    model << cname() << " S";
+    for (int i = 1; i <= inst.V; ++i) model << " - r_" << i;
+    model << " = 0\n";
+    model << cname();
+    for (std::size_t m = 0; m < s_values.size(); ++m) {
+        binaries.push_back("SV_" + std::to_string(m));
+        model << (m ? " + " : " ") << "SV_" << m;
+    }
+    model << " = 1\n";
+    model << cname() << " S";
+    for (std::size_t m = 0; m < s_values.size(); ++m) model << " - " << s_values[m] << " SV_" << m;
+    model << " = 0\n";
+    for (std::size_t m = 0; m < s_values.size(); ++m) {
+        const std::string wh = "WH_" + std::to_string(m);
+        bounds.push_back(" 0 <= " + wh + " <= " + std::to_string(hmax));
+        model << cname() << " " << wh << " - H <= 0\n";
+        model << cname() << " " << wh << " - " << hmax << " SV_" << m << " <= 0\n";
+        model << cname() << " " << wh << " - H - " << hmax << " SV_" << m << " >= " << -hmax << "\n";
+    }
+    model << "Bounds\n";
+    for (const auto& b : bounds) model << b << "\n";
+    model << " 0 <= P\n 0 <= H <= " << hmax << "\n 0 <= S <= " << smax << "\n";
+    model << "Generals\n";
+    for (const auto& g : generals) model << " " << g << "\n";
     model << "Binaries\n";
-    for (std::size_t i = 0; i < candidates.size(); ++i) model << " z" << i << "\n";
+    for (const auto& b : binaries) model << " " << b << "\n";
     model << "End\n";
     writeText(lp, model.str());
     std::ostringstream script;
     script << "read " << lp.string() << "\n";
     script << "set timelimit " << opt.cplex_time_limit << "\n";
     script << "set mip tolerances mipgap " << opt.cplex_gap << "\n";
+    script << "set mip tolerances absmipgap 0\n";
     script << "optimize\n";
     script << "write " << sol.string() << "\n";
     script << "quit\n";
@@ -322,23 +583,48 @@ bool writeAndRunCplexCandidateMip(const RunOptions& opt,
     r.cplex_runtime_ms = timer.seconds() * 1000.0;
     if (code != 0 || !std::filesystem::exists(sol)) {
         r.cplex_status = "cplex_failed";
-        r.notes.push_back("CPLEX candidate-MIP failed; see " + log.string());
+        r.status = "cplex_true_milp_not_closed";
+        r.cplex_gap = 1.0;
+        r.notes.push_back("CPLEX true fixed-route MILP failed; see " + log.string());
         return false;
     }
-    std::ifstream sf(sol);
-    std::string soltext((std::istreambuf_iterator<char>(sf)), std::istreambuf_iterator<char>());
-    std::smatch m;
-    std::regex obj_re("objectiveValue=\"([^\"]+)\"");
-    if (std::regex_search(soltext, m, obj_re)) {
-        r.cplex_objective = std::stod(m[1].str());
-    } else {
-        r.cplex_objective = r.objective;
+    r.cplex_status = parseSolutionStatus(sol);
+    r.cplex_objective = parseSolutionObjective(sol);
+    const bool optimal = r.cplex_status.find("optimal") != std::string::npos ||
+                         r.cplex_status.find("Optimal") != std::string::npos;
+    if (!optimal || !std::isfinite(r.cplex_objective)) {
+        r.cplex_gap = 1.0;
+        r.status = "cplex_true_milp_not_closed";
+        r.notes.push_back("CPLEX true fixed-route MILP did not prove optimality.");
+        return false;
     }
+    auto vars = parseCplexVariables(sol);
+    std::vector<RoutePlan> sol_routes = fixed_routes;
+    for (auto& route : sol_routes) {
+        route.operations.clear();
+        for (std::size_t pos = 1; pos + 1 < route.nodes.size(); ++pos) {
+            const int s = route.nodes[pos];
+            const int p = static_cast<int>(std::llround(vars[pvar(route.vehicle, static_cast<int>(pos))]));
+            const int d = static_cast<int>(std::llround(vars[dvar(route.vehicle, static_cast<int>(pos))]));
+            if (p || d) route.operations.push_back({s, p, d});
+        }
+    }
+    r.routes = sol_routes;
+    r.verification = verifySolution(inst, r.routes, opt.lambda);
+    r.verifier_passed = r.verification.feasible;
+    r.final_inventory = r.verification.final_inventory;
+    r.G = r.verification.G;
+    r.P = r.verification.P;
+    r.objective = r.verification.objective;
+    r.cplex_G = r.G;
+    r.cplex_P = r.P;
     r.cplex_LB = r.cplex_objective;
     r.cplex_UB = r.cplex_objective;
     r.cplex_gap = 0.0;
-    r.cplex_status = "candidate_mip_optimal_gap0";
-    return true;
+    r.exact_for_fixed_routes = r.verifier_passed;
+    r.status = r.verifier_passed ? "cplex_true_fixed_route_milp_optimal" : "cplex_solution_failed_verifier";
+    r.notes.push_back("CPLEX solved true fixed-route loading MILP with p/d/L/u/Y/r/deviation/pairwise variables and exact ratio-sum selector linearization.");
+    return r.verifier_passed;
 }
 
 Result solveCore(const Instance& inst, const RunOptions& opt,
@@ -361,6 +647,7 @@ Result solveCore(const Instance& inst, const RunOptions& opt,
     CombineState st;
     st.inst = &inst;
     st.opt = &opt;
+    st.timer = &timer;
     st.sets = &sets;
     st.inv = inst.initial;
     st.all_candidates = collect_candidates ? candidates : nullptr;
@@ -369,6 +656,11 @@ Result solveCore(const Instance& inst, const RunOptions& opt,
     r.profile_bpc_nodes = st.nodes;
     r.profile_bpc_pricing_calls = static_cast<long long>(sets.size());
     r.runtime_ms = timer.seconds() * 1000.0;
+    if (st.aborted) {
+        r.exact_for_fixed_routes = false;
+        r.status = "profile_bpc_time_or_node_limit";
+        r.notes.push_back("Exact profile master was stopped by profile-BPC time/node limit; no exactness claim is made.");
+    }
     if (std::isfinite(st.best.objective)) {
         r.objective = st.best.objective;
         r.G = st.best.G;
@@ -377,7 +669,7 @@ Result solveCore(const Instance& inst, const RunOptions& opt,
         r.routes = st.best.routes;
         r.verification = verifySolution(inst, r.routes, opt.lambda);
         r.verifier_passed = r.verification.feasible;
-        r.status = r.exact_for_fixed_routes ? "fixed_route_optimal" : "fixed_route_diagnostic_pruned_profiles";
+        if (r.status.empty()) r.status = r.exact_for_fixed_routes ? "fixed_route_optimal" : "fixed_route_diagnostic_pruned_profiles";
     } else {
         r.status = "no_feasible_profile_combination";
         r.exact_for_fixed_routes = false;
@@ -475,29 +767,21 @@ Result solveFixedRoutes(const Instance& inst, const RunOptions& opt,
 
 Result solveCplexFixedRoute(const Instance& inst, const RunOptions& opt,
                             const std::vector<RoutePlan>& fixed_routes) {
-    std::vector<Candidate> candidates;
-    RunOptions exact_opt = opt;
-    exact_opt.profile_exact = true;
-    exact_opt.allow_natural_mode_pruning = false;
-    exact_opt.profile_limit = 0;
-    Result r = solveCore(inst, exact_opt, fixed_routes, true, &candidates);
+    Timer timer;
+    Result r;
+    r.instance = inst.name;
+    r.route_set_id = opt.route_json_path.empty() ? "generated_route_set" : basenameNoExt(opt.route_json_path);
+    r.V = inst.V;
+    r.M = inst.M;
+    r.route_lengths = routeLengths(fixed_routes);
+    r.result_file = opt.out_path;
+    r.log_file = opt.log_path;
     r.algorithm = "cplex-fixed-route";
-    r.cplex_G = r.G;
-    r.cplex_P = r.P;
-    const bool cplex_ok = r.exact_for_fixed_routes && writeAndRunCplexCandidateMip(exact_opt, r.route_set_id, candidates, r);
-    if (!cplex_ok && r.exact_for_fixed_routes) {
-        r.cplex_status = "exact_enumeration_fallback_gap0";
-        r.cplex_objective = r.objective;
-        r.cplex_G = r.G;
-        r.cplex_P = r.P;
-        r.cplex_LB = r.objective;
-        r.cplex_UB = r.objective;
-        r.cplex_gap = 0.0;
-        r.notes.push_back("CPLEX command unavailable/failed; exact complete profile enumeration used as ground-truth fallback.");
-    }
-    if (r.exact_for_fixed_routes) {
-        r.objective_diff = std::fabs(r.objective - r.cplex_objective);
-    }
+    r.exact_for_fixed_routes = false;
+    r.routes = fixed_routes;
+    (void)writeAndRunTrueFixedRouteMilp(inst, opt, fixed_routes, r);
+    r.runtime_ms = timer.seconds() * 1000.0;
+    if (r.cplex_gap == 0.0 && r.verifier_passed) r.objective_diff = 0.0;
     return r;
 }
 
@@ -731,6 +1015,175 @@ std::vector<Result> runRound2Suite(const RunOptions& options) {
     writeSummary("exact_algorithm_comparison.csv", profile_rows);
     writeSummary("v12_m2_route_set_comparison.csv", v12_rows);
     writeSummary("incremental_exact_summary.csv", inc_rows);
+    writeText(root / "summaries" / "skipped_or_failed_rows.csv", skipped);
+    return all;
+}
+
+std::vector<Result> runRound3Suite(const RunOptions& options) {
+    const std::filesystem::path root = "results/round3_paper_exact_loading";
+    for (const auto& d : {"raw", "logs", "routes", "cplex", "summaries", "docs"}) {
+        std::filesystem::create_directories(root / d);
+    }
+    struct CaseSpec {
+        std::filesystem::path path;
+        std::string group;
+        int count;
+        int min_len;
+        int max_len;
+    };
+    std::vector<CaseSpec> cases = {
+        {std::filesystem::path(options.exactebrp_root) / "testdata/examples/gcap_smoke_V4_M1.txt", "v4", 20, 1, 3},
+        {std::filesystem::path(options.exactebrp_root) / "reference/generated/regen_V8_M2_average.txt", "v8", 20, 1, 3},
+        {std::filesystem::path(options.exactebrp_root) / "reference/generated/regen_V10_M2_average.txt", "v10", 20, 1, 3},
+        {std::filesystem::path(options.exactebrp_root) / "reference/regen_candidate_V12_M2_average.txt", "v12_short", 30, 1, 2},
+        {std::filesystem::path(options.exactebrp_root) / "reference/regen_candidate_V12_M2_average.txt", "v12_medium", 30, 3, 4},
+        {std::filesystem::path(options.exactebrp_root) / "reference/regen_candidate_V12_M2_average.txt", "v12_long", 20, 5, 6},
+        {std::filesystem::path(options.exactebrp_root) / "reference/generated/regen_V20_M2_average.txt", "v20", 10, 1, 2}
+    };
+    std::vector<Result> all;
+    std::vector<Result> cplex_rows, bpc_rows, dp_rows, v12_medium_rows, inc_rows;
+    std::string skipped = "instance,route_set_id,reason\n";
+
+    auto writeOne = [&](Result& row, const std::string& log_extra = "") {
+        writeText(row.result_file, toJson(row));
+        writeText(row.log_file, "status=" + row.status + "\nalgorithm=" + row.algorithm +
+                  "\nobjective=" + std::to_string(row.objective) + "\n" + log_extra);
+        all.push_back(row);
+    };
+
+    for (const auto& cs : cases) {
+        if (!std::filesystem::exists(cs.path)) {
+            skipped += cs.path.string() + ",,missing_input\n";
+            continue;
+        }
+        Instance inst = parseInstanceFile(cs.path, options.route_time_limit,
+                                          options.pickup_time, options.drop_time);
+        for (int id = 0; id < cs.count; ++id) {
+            RunOptions opt = options;
+            opt.input_path = cs.path.string();
+            opt.route_length_min = cs.min_len;
+            opt.route_length_max = cs.max_len;
+            opt.seed = options.seed + id * 31 + static_cast<int>(cs.group.size()) * 1009;
+            opt.profile_exact = true;
+            opt.allow_natural_mode_pruning = false;
+            opt.profile_limit = 0;
+            std::string route_set_id = caseNameFromPath(cs.path) + "_" + cs.group + "_rs" + std::to_string(id);
+            auto routes = (id == 0) ? makeDeterministicRoutes(inst, cs.max_len)
+                                    : makeRandomRoutes(inst, opt, id);
+            const auto route_path = root / "routes" / (route_set_id + ".json");
+            writeRouteJson(route_path, routes, route_set_id);
+            opt.route_json_path = route_path.string();
+
+            opt.algorithm = "cplex-fixed-route";
+            opt.out_path = (root / "raw" / (route_set_id + "_cplex_milp.json")).string();
+            opt.log_path = (root / "logs" / (route_set_id + "_cplex_milp.log")).string();
+            Result cplex;
+            const bool cplex_exists = std::filesystem::exists(opt.out_path);
+            if (!cplex_exists) {
+                cplex = solveCplexFixedRoute(inst, opt, routes);
+                cplex.route_set_id = route_set_id;
+                writeOne(cplex, "cplex_status=" + cplex.cplex_status + "\n");
+                cplex_rows.push_back(cplex);
+                if (cs.group == "v12_medium") v12_medium_rows.push_back(cplex);
+            } else {
+                cplex.instance = inst.name;
+                cplex.route_set_id = route_set_id;
+                cplex.algorithm = "cplex-fixed-route";
+                cplex.status = "existing_raw_not_rerun";
+                cplex.cplex_status = "existing_raw_not_rerun";
+                cplex.result_file = opt.out_path;
+            }
+
+            const bool run_profile = !(cs.group == "v12_long");
+            if (!run_profile) {
+                skipped += inst.name + "," + route_set_id + ",profile_bpc_skipped_for_long_routes_after_medium_rows_tested\n";
+                continue;
+            }
+
+            opt.algorithm = "profile-bpc";
+            opt.out_path = (root / "raw" / (route_set_id + "_profile_bpc.json")).string();
+            opt.log_path = (root / "logs" / (route_set_id + "_profile_bpc.log")).string();
+            if (std::filesystem::exists(opt.out_path)) continue;
+            Result bpc = solveFixedRoutes(inst, opt, routes);
+            bpc.algorithm = "profile-bpc";
+            bpc.status = bpc.exact_for_fixed_routes ? "profile_bpc_exact_bb_optimal" : bpc.status;
+            bpc.route_set_id = route_set_id;
+            bpc.cplex_status = cplex.cplex_status;
+            bpc.cplex_objective = cplex.cplex_objective;
+            bpc.cplex_G = cplex.cplex_G;
+            bpc.cplex_P = cplex.cplex_P;
+            bpc.cplex_LB = cplex.cplex_LB;
+            bpc.cplex_UB = cplex.cplex_UB;
+            bpc.cplex_gap = cplex.cplex_gap;
+            if (cplex.cplex_gap == 0.0 && cplex.verifier_passed) {
+                bpc.objective_diff = std::fabs(bpc.objective - cplex.cplex_objective);
+                if (bpc.objective_diff > 1e-6) {
+                    bpc.status = "profile_bpc_mismatch_against_true_cplex_milp";
+                    bpc.exact_for_fixed_routes = false;
+                }
+            } else {
+                bpc.notes.push_back("CPLEX true MILP did not close; profile-BPC exactness is not externally certified on this row.");
+            }
+            writeOne(bpc, "objective_diff=" + std::to_string(bpc.objective_diff) + "\n");
+            bpc_rows.push_back(bpc);
+            if (cs.group == "v12_medium") v12_medium_rows.push_back(bpc);
+
+            if (cs.group == "v4" || cs.group == "v8" || cs.group == "v10") {
+                opt.algorithm = "profile-dp";
+                opt.out_path = (root / "raw" / (route_set_id + "_profile_dp.json")).string();
+                opt.log_path = (root / "logs" / (route_set_id + "_profile_dp.log")).string();
+                Result dp = solveFixedRoutes(inst, opt, routes);
+                dp.algorithm = "profile-dp";
+                dp.route_set_id = route_set_id;
+                dp.cplex_status = cplex.cplex_status;
+                dp.cplex_objective = cplex.cplex_objective;
+                dp.cplex_LB = cplex.cplex_LB;
+                dp.cplex_UB = cplex.cplex_UB;
+                dp.cplex_gap = cplex.cplex_gap;
+                if (cplex.cplex_gap == 0.0 && cplex.verifier_passed) dp.objective_diff = std::fabs(dp.objective - cplex.cplex_objective);
+                writeOne(dp, "objective_diff=" + std::to_string(dp.objective_diff) + "\n");
+                dp_rows.push_back(dp);
+            }
+        }
+    }
+
+    std::vector<std::pair<std::filesystem::path, int>> inc_cases = {
+        {std::filesystem::path(options.exactebrp_root) / "testdata/examples/gcap_smoke_V4_M1.txt", 3},
+        {std::filesystem::path(options.exactebrp_root) / "reference/generated/regen_V8_M2_average.txt", 2},
+        {std::filesystem::path(options.exactebrp_root) / "reference/generated/regen_V10_M2_average.txt", 2},
+        {std::filesystem::path(options.exactebrp_root) / "reference/regen_candidate_V12_M2_average.txt", 2}
+    };
+    for (const auto& inc_case : inc_cases) {
+        if (!std::filesystem::exists(inc_case.first)) continue;
+        RunOptions opt = options;
+        opt.input_path = inc_case.first.string();
+        opt.algorithm = "incremental-test";
+        opt.route_length_limit = inc_case.second;
+        opt.profile_exact = true;
+        opt.allow_natural_mode_pruning = false;
+        opt.profile_limit = 0;
+        Instance inst = parseInstanceFile(opt.input_path, opt.route_time_limit,
+                                          opt.pickup_time, opt.drop_time);
+        const std::string tag = caseNameFromPath(inc_case.first) + "_inc";
+        opt.out_path = (root / "raw" / (tag + "_incremental.json")).string();
+        opt.log_path = (root / "logs" / (tag + "_incremental.log")).string();
+        Result inc = runIncrementalTest(inst, opt);
+        inc.route_set_id = tag + "_100_moves";
+        writeOne(inc, "speedup=" + std::to_string(inc.incremental_speedup) + "\n");
+        inc_rows.push_back(inc);
+    }
+
+    auto writeSummary = [&](const std::string& file, const std::vector<Result>& rows) {
+        std::string csv = csvHeader();
+        for (const auto& r : rows) csv += csvRow(r);
+        writeText(root / "summaries" / file, csv);
+    };
+    writeSummary("cplex_fixed_route_milp_summary.csv", cplex_rows);
+    writeSummary("profile_bpc_comparison.csv", bpc_rows);
+    writeSummary("profile_dp_baseline.csv", dp_rows);
+    writeSummary("v12_m2_medium_route_comparison.csv", v12_medium_rows);
+    writeSummary("incremental_exact_summary.csv", inc_rows);
+    writeSummary("all_round3_results.csv", all);
     writeText(root / "summaries" / "skipped_or_failed_rows.csv", skipped);
     return all;
 }

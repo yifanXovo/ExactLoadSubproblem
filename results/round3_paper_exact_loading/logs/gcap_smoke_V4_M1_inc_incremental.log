@@ -1,0 +1,4 @@
+status=incremental_exact_cache_matches_full
+algorithm=incremental-test
+objective=0.276250
+speedup=1.948685

@@ -21,5 +21,6 @@ void writeRoutesToJson(const std::filesystem::path& path,
                        const std::string& route_set_id);
 std::vector<Result> runDefaultSuite(const RunOptions& options);
 std::vector<Result> runRound2Suite(const RunOptions& options);
+std::vector<Result> runRound3Suite(const RunOptions& options);
 
 } // namespace load_exact

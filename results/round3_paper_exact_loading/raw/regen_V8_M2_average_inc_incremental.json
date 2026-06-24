@@ -1,0 +1,52 @@
+{
+    "instance":  "regen_V8_M2_average.txt",
+    "route_set_id":  "regen_V8_M2_average_inc_100_moves",
+    "V":  8,
+    "M":  2,
+    "route_lengths":  "2;2",
+    "algorithm":  "incremental-test",
+    "status":  "incremental_exact_cache_matches_full",
+    "objective":  0.523683751007,
+    "G":  0,
+    "P":  0,
+    "runtime_ms":  1239.949,
+    "cplex_status":  "not_run",
+    "cplex_objective":  0,
+    "cplex_G":  0,
+    "cplex_P":  0,
+    "cplex_LB":  0,
+    "cplex_UB":  0,
+    "cplex_gap":  0,
+    "cplex_runtime_ms":  0,
+    "cplex_nodes":  0,
+    "profile_bpc_status":  "incremental_exact_cache_matches_full",
+    "profile_bpc_objective":  0.523683751007,
+    "profile_bpc_G":  0,
+    "profile_bpc_P":  0,
+    "profile_bpc_LB":  0.523683751007,
+    "profile_bpc_UB":  0.523683751007,
+    "profile_bpc_gap":  0,
+    "profile_bpc_runtime_ms":  1239.949,
+    "objective_diff":  0,
+    "profiles_generated":  0,
+    "profiles_after_dominance":  0,
+    "profile_bpc_nodes":  0,
+    "profile_bpc_pricing_calls":  0,
+    "cache_hits":  198,
+    "cache_misses":  2,
+    "incremental_speedup":  1.01889668201,
+    "verifier_passed":  true,
+    "exact_for_fixed_routes":  true,
+    "result_file":  "results/round3_paper_exact_loading\\raw\\regen_V8_M2_average_inc_incremental.json",
+    "log_file":  "results/round3_paper_exact_loading\\logs\\regen_V8_M2_average_inc_incremental.log",
+    "final_inventory":  [
+
+                        ],
+    "verification_errors":  [
+
+                            ],
+    "notes":  [
+                  "Exact cache-reuse solve recomputes only changed route profile sets; objective update was checked against full recomputation.",
+                  "Objective update CPU time ms=0.010300"
+              ]
+}

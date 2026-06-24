@@ -1,0 +1,4 @@
+status=cplex_true_fixed_route_milp_optimal
+algorithm=cplex-fixed-route
+objective=0.936270
+cplex_status=integer optimal solution

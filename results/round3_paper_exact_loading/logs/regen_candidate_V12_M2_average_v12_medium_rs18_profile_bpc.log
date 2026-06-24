@@ -1,0 +1,4 @@
+status=profile_bpc_time_or_node_limit
+algorithm=profile-bpc
+objective=0.912213
+objective_diff=0.000000

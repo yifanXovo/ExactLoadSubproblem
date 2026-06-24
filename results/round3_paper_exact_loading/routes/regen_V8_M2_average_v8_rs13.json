@@ -1,0 +1,7 @@
+{
+  "route_set_id": "regen_V8_M2_average_v8_rs13",
+  "routes": [
+    {"vehicle": 0, "nodes": [0, 8, 7, 0]},
+    {"vehicle": 1, "nodes": [0, 1, 0]}
+  ]
+}

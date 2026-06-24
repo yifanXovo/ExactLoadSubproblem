@@ -75,13 +75,19 @@ struct RunOptions {
     double cplex_gap = 0.0;
     std::string route_json_path;
     std::string route_generator = "deterministic";
+    std::string profile_master = "bb";
+    std::string profile_pricing = "exact-dp";
     int route_count = 1;
     int route_length_min = 3;
     int route_length_max = 4;
     int seed = 1;
     bool allow_duplicate_stations = false;
+    double profile_bpc_time_limit = 300.0;
+    double profile_bpc_gap = 0.0;
+    int profile_bpc_max_nodes = 0;
     bool run_suite = false;
     bool round2_suite = false;
+    bool round3_suite = false;
 };
 
 struct Result {

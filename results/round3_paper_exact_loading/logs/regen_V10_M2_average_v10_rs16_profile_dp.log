@@ -1,0 +1,4 @@
+status=fixed_route_optimal
+algorithm=profile-dp
+objective=1.192824
+objective_diff=0.000000
